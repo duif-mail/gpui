@@ -1,0 +1,187 @@
+name: Auto-sync GPUI from Zed
+
+on:
+  schedule:
+    - cron: '17 */6 * * *' # Every 6 hours at :17
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpui-mirror-sync
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.detect.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install manifest tooling
+        run: python -m pip install 'tomlkit==0.13.3'
+      - name: Save current upstream revision
+        run: |
+          if [ -f UPSTREAM ]; then
+            cp UPSTREAM "$RUNNER_TEMP/previous-upstream"
+          fi
+      - name: Download upstream Zed temporarily
+        run: git clone --depth 1 --filter=blob:none https://github.com/zed-industries/zed.git "$RUNNER_TEMP/zed"
+      - name: Fetch recent upstream history for relevant commit summaries
+        shell: bash
+        run: |
+          if [ ! -s "$RUNNER_TEMP/previous-upstream" ]; then exit 0; fi
+          previous="$(cat "$RUNNER_TEMP/previous-upstream")"
+          if ! [[ "$previous" =~ ^[[:xdigit:]]{40}$ ]]; then
+            echo 'Invalid previous upstream SHA' >&2
+            exit 1
+          fi
+          # Download commit metadata incrementally, without downloading all of
+          # Zed's previous file contents. The mirror extraction uses current HEAD.
+          for n in 1 2 3 4 5; do
+            if git -C "$RUNNER_TEMP/zed" cat-file -e "$previous^{commit}" 2>/dev/null; then
+              break
+            fi
+            git -C "$RUNNER_TEMP/zed" fetch --filter=blob:none --deepen=200 origin HEAD
+          done
+          if ! git -C "$RUNNER_TEMP/zed" cat-file -e "$previous^{commit}" 2>/dev/null; then
+            echo 'Previous SHA outside fetched history; Discord will link full compare.'
+          fi
+      - name: Extract GPUI and its in-tree dependency closure
+        run: python scripts/extract_gpui.py --upstream "$RUNNER_TEMP/zed" --output .
+      - name: Apply optional patches
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for patch in patches/*.patch; do
+            git apply --check "$patch"
+            git apply "$patch"
+          done
+      - name: Compute real mirror diff and changelog
+        id: detect
+        shell: bash
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'Mirror already up to date.'
+            exit 0
+          fi
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          mkdir -p .sync-artifacts
+          python scripts/report_sync.py \
+            --mirror . \
+            --upstream "$RUNNER_TEMP/zed" \
+            --previous "$RUNNER_TEMP/previous-upstream" \
+            --output .sync-artifacts/report.json
+          git diff --cached --binary > .sync-artifacts/gpui.patch
+          tar -czf .sync-artifacts/mirror.tar.gz --exclude=.git --exclude=.sync-artifacts --exclude=target -C "$GITHUB_WORKSPACE" .
+          git diff --cached --stat | tail -30
+      - name: Upload changes for publishing and multi-platform checks
+        if: steps.detect.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpui-sync-preview
+          path: .sync-artifacts/
+          retention-days: 3
+          if-no-files-found: error
+
+  validate:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: gpui-sync-preview
+          path: preview
+      - name: Unpack proposed mirror
+        shell: bash
+        run: |
+          mkdir -p mirror
+          tar -xzf preview/mirror.tar.gz -C mirror
+      - name: Linux prerequisites
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libfontconfig1-dev \
+            libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev \
+            libxi-dev libxrandr-dev libxinerama-dev libgl1-mesa-dev libegl1-mesa-dev
+      - name: Set Rust toolchain from upstream rust-toolchain.toml
+        working-directory: mirror
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mirror
+      - name: Validate workspace metadata
+        working-directory: mirror
+        run: cargo metadata --format-version 1 --no-deps
+      - name: Compile GPUI and platform backends
+        working-directory: mirror
+        run: cargo check -p gpui -p gpui_platform
+
+  publish:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.push.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: gpui-sync-preview
+          path: preview
+      - name: Commit extracted GPUI directly to main
+        id: push
+        shell: bash
+        run: |
+          git apply --index --binary preview/gpui.patch
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "Sync GPUI to Zed $(git show :UPSTREAM | cut -c1-12)"
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  notify:
+    needs: [prepare, validate, publish]
+    if: always() && (needs.prepare.outputs.changed == 'true' || needs.prepare.result == 'failure')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download changelog if one was generated
+        if: needs.prepare.outputs.changed == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: gpui-sync-preview
+          path: preview
+      - name: Post success or failure to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PUSHED_SHA: ${{ needs.publish.outputs.sha }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+        shell: bash
+        run: |
+          if [ "$PUBLISH_RESULT" != 'success' ]; then
+            status=failed
+          elif [ "$VALIDATE_RESULT" != 'success' ]; then
+            status=warning
+          else
+            status=success
+          fi
+          python scripts/notify_discord.py --report preview/report.json --status "$status" --commit "$PUSHED_SHA"

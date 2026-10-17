@@ -1,0 +1,5 @@
+/target/
+/.sync-artifacts/
+/.venv/
+__pycache__/
+*.pyc

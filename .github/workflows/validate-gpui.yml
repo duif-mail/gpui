@@ -1,0 +1,26 @@
+name: Manual GPUI validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cargo:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libfontconfig1-dev \
+            libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev \
+            libxi-dev libxrandr-dev libxinerama-dev libgl1-mesa-dev libegl1-mesa-dev
+      - run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo metadata --format-version 1 --no-deps
+      - run: cargo check -p gpui -p gpui_platform
