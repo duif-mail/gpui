@@ -19,7 +19,8 @@ def shorten(text: str, max_length: int) -> str:
     return text[: max_length - 20] + "\n… (see full diff)"
 
 
-def render(report: dict, repository: str, run_url: str, commit: str, status: str) -> str:
+def render(report: dict, repository: str, run_url: str, commit: str, status: str,
+           pr_url: str = "", pr_failed: bool = False) -> str:
     if status == "failed":
         old, new = report.get("previous", ""), report.get("current", "")
         upstream_link = (
@@ -42,6 +43,10 @@ def render(report: dict, repository: str, run_url: str, commit: str, status: str
         f"**Mirror diff:** {report['file_count']} files, +{report['added']:,} / -{report['removed']:,} lines",
         f"[Mirror commit (full diff)]({mirror_link}) · [Zed upstream diff]({upstream_link}) · [Run]({run_url})",
     ]
+    if pr_url:
+        lines.append(f"**Downstream pull request:** {pr_url}")
+    elif pr_failed:
+        lines.append("⚠️ **Opening the downstream pull request failed.** See the workflow logs.")
     if report.get("new_crates"):
         lines.append("**Added crates:** " + ", ".join("`" + item + "`" for item in report["new_crates"][:8]))
     if report.get("removed_crates"):
@@ -71,6 +76,8 @@ def main() -> None:
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--status", choices=["success", "warning", "failed"], required=True)
     parser.add_argument("--commit", default="")
+    parser.add_argument("--pr-url", default="", help="downstream pull request that was opened or updated")
+    parser.add_argument("--pr-failed", action="store_true", help="opening the downstream pull request failed")
     args = parser.parse_args()
     url = os.environ.get("DISCORD_WEBHOOK_URL", "")
     if not url:
@@ -85,6 +92,8 @@ def main() -> None:
         run_url=f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{repository}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}",
         commit=args.commit,
         status=args.status,
+        pr_url=args.pr_url,
+        pr_failed=args.pr_failed,
     )
     payload = json.dumps({"content": message, "allowed_mentions": {"parse": []}}).encode()
     req = urllib.request.Request(url, payload, headers={"Content-Type": "application/json", "User-Agent": "gpui-mirror-sync/1.0"}, method="POST")

@@ -1,2 +1,5 @@
 # Relative upstream paths needed by build.rs or include_* outside the crate.
 # Only add paths after a cross-platform build reports a missing resource.
+
+# Installs the system libraries GPUI needs on Linux; downstream CI runs it.
+script/linux

@@ -155,8 +155,130 @@ jobs:
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  notify:
+  # Optional: keep a pull request open in a downstream repository that pins this
+  # mirror as a submodule. Enabled by setting the DOWNSTREAM_REPO repository variable
+  # (owner/name) together with the DOWNSTREAM_TOKEN secret. Optional variables:
+  # DOWNSTREAM_SUBMODULE_PATH (default third_party/gpui) and DOWNSTREAM_BASE_BRANCH
+  # (default: the repository's default branch).
+  downstream:
     needs: [prepare, validate, publish]
+    if: needs.publish.result == 'success' && needs.validate.result == 'success' && vars.DOWNSTREAM_REPO != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      pr_url: ${{ steps.pr.outputs.url }}
+    env:
+      DOWNSTREAM_REPO: ${{ vars.DOWNSTREAM_REPO }}
+      PIN_PATH: ${{ vars.DOWNSTREAM_SUBMODULE_PATH || 'third_party/gpui' }}
+      NEW: ${{ needs.publish.outputs.sha }}
+      BRANCH: automation/gpui-sync
+    steps:
+      - name: Require the downstream token
+        env:
+          TOKEN: ${{ secrets.DOWNSTREAM_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo '::error::Set the DOWNSTREAM_TOKEN Actions secret: a token with contents and pull-requests write access to the downstream repository.'
+            exit 1
+          fi
+      - name: Check out this mirror with full history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.publish.outputs.sha }}
+          fetch-depth: 0
+          path: mirror
+      - name: Check out the downstream repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.DOWNSTREAM_REPO }}
+          ref: ${{ vars.DOWNSTREAM_BASE_BRANCH }}
+          token: ${{ secrets.DOWNSTREAM_TOKEN }}
+          path: downstream
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Open or update the downstream pull request
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.DOWNSTREAM_TOKEN }}
+        run: |
+          set -euo pipefail
+          base="$(git -C downstream branch --show-current)"
+
+          # The pin must be a submodule that points at this repository, otherwise
+          # moving it to a commit of this mirror would break the downstream checkout.
+          entry="$(git -C downstream ls-tree HEAD -- "$PIN_PATH")"
+          case "$entry" in
+            '160000 commit '*) ;;
+            *) echo "::error::$PIN_PATH is not a submodule in $DOWNSTREAM_REPO@$base"; exit 1 ;;
+          esac
+          old="$(printf '%s' "$entry" | awk '{print $3}')"
+          name="$( (git -C downstream config -f .gitmodules --get-regexp '^submodule\..*\.path$' || true) \
+            | awk -v p="$PIN_PATH" '$2 == p { sub(/^submodule\./, "", $1); sub(/\.path$/, "", $1); print $1 }')"
+          url="$(git -C downstream config -f .gitmodules --get "submodule.${name}.url" || true)"
+          normalized="${url,,}"; normalized="${normalized%.git}"
+          case "$normalized" in
+            *[/:]"${GITHUB_REPOSITORY,,}") ;;
+            *) echo "::error::Submodule $PIN_PATH points at '$url', not at $GITHUB_REPOSITORY"; exit 1 ;;
+          esac
+          if [ "$old" = "$NEW" ]; then
+            echo "$PIN_PATH already points at $NEW."
+            exit 0
+          fi
+
+          # Partial Zed clone, only to list the upstream commits between both pins.
+          new_up="$(git -C mirror show "$NEW:UPSTREAM")"
+          old_up=''
+          if git -C mirror cat-file -e "$old^{commit}" 2>/dev/null; then
+            old_up="$(git -C mirror show "$old:UPSTREAM")"
+          fi
+          zed="$RUNNER_TEMP/zed"
+          if [[ "$new_up" =~ ^[[:xdigit:]]{40}$ ]]; then
+            git init -q "$zed"
+            git -C "$zed" remote add origin https://github.com/zed-industries/zed.git
+            git -C "$zed" fetch -q --depth 1 --filter=blob:none origin "$new_up" || true
+            if [[ "$old_up" =~ ^[[:xdigit:]]{40}$ ]]; then
+              for n in 1 2 3 4 5; do
+                if git -C "$zed" cat-file -e "$old_up^{commit}" 2>/dev/null; then break; fi
+                git -C "$zed" fetch -q --filter=blob:none --deepen=200 origin "$new_up" || break
+              done
+            fi
+          fi
+
+          title_file="$RUNNER_TEMP/pr-title.txt"
+          body_file="$RUNNER_TEMP/pr-body.md"
+          python mirror/scripts/downstream_pr.py \
+            --mirror mirror --upstream "$zed" --old "$old" --new "$NEW" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --body-out "$body_file" --title-out "$title_file"
+          title="$(cat "$title_file")"
+
+          # One rolling branch and PR: every sync force-updates it until it is merged.
+          git -C downstream checkout -q -B "$BRANCH"
+          git -C downstream update-index --cacheinfo "160000,$NEW,$PIN_PATH"
+          git -C downstream \
+            -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "$title" -m "Mirror commit: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$NEW"
+          git -C downstream push -q --force origin "$BRANCH"
+
+          number="$(gh pr list --repo "$DOWNSTREAM_REPO" --head "$BRANCH" --base "$base" --state open \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --repo "$DOWNSTREAM_REPO" --title "$title" --body-file "$body_file"
+            pr_url="$(gh pr view "$number" --repo "$DOWNSTREAM_REPO" --json url --jq .url)"
+          else
+            pr_url="$(gh pr create --repo "$DOWNSTREAM_REPO" --base "$base" --head "$BRANCH" \
+              --title "$title" --body-file "$body_file")"
+          fi
+          echo "Pull request: $pr_url"
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+  notify:
+    needs: [prepare, validate, publish, downstream]
     if: always() && (needs.prepare.outputs.changed == 'true' || needs.prepare.result == 'failure')
     runs-on: ubuntu-24.04
     permissions:
@@ -176,6 +298,8 @@ jobs:
           PUSHED_SHA: ${{ needs.publish.outputs.sha }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
+          DOWNSTREAM_RESULT: ${{ needs.downstream.result }}
+          DOWNSTREAM_PR_URL: ${{ needs.downstream.outputs.pr_url }}
         shell: bash
         run: |
           if [ "$PUBLISH_RESULT" != 'success' ]; then
@@ -185,4 +309,7 @@ jobs:
           else
             status=success
           fi
-          python scripts/notify_discord.py --report preview/report.json --status "$status" --commit "$PUSHED_SHA"
+          args=(--report preview/report.json --status "$status" --commit "$PUSHED_SHA")
+          if [ -n "$DOWNSTREAM_PR_URL" ]; then args+=(--pr-url "$DOWNSTREAM_PR_URL"); fi
+          if [ "$DOWNSTREAM_RESULT" = 'failure' ]; then args+=(--pr-failed); fi
+          python scripts/notify_discord.py "${args[@]}"
