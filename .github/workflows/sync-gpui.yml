@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '17 */6 * * *' # Every 6 hours at :17
   workflow_dispatch:
+    inputs:
+      force_downstream:
+        description: 'When there is nothing new to sync, still open or refresh the downstream pull request from the latest sync commit on main (needs DOWNSTREAM_REPO).'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -162,7 +167,13 @@ jobs:
   # (default: the repository's default branch).
   downstream:
     needs: [prepare, validate, publish]
-    if: needs.publish.result == 'success' && needs.validate.result == 'success' && vars.DOWNSTREAM_REPO != ''
+    # Normally runs after a validated publish. A manual run with force_downstream also
+    # runs it when there was nothing new to sync, using the latest sync commit on main.
+    if: >-
+      always() && vars.DOWNSTREAM_REPO != '' && needs.prepare.result == 'success' && (
+        (needs.publish.result == 'success' && needs.validate.result == 'success') ||
+        (inputs.force_downstream && needs.prepare.outputs.changed != 'true')
+      )
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -172,6 +183,7 @@ jobs:
       DOWNSTREAM_REPO: ${{ vars.DOWNSTREAM_REPO }}
       PIN_PATH: ${{ vars.DOWNSTREAM_SUBMODULE_PATH || 'third_party/gpui' }}
       NEW: ${{ needs.publish.outputs.sha }}
+      UNVALIDATED: ${{ needs.publish.result == 'success' && 'false' || 'true' }}
       BRANCH: automation/gpui-sync
     steps:
       - name: Require the downstream token
@@ -185,7 +197,7 @@ jobs:
       - name: Check out this mirror with full history
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.publish.outputs.sha }}
+          ref: ${{ needs.publish.outputs.sha || github.sha }}
           fetch-depth: 0
           path: mirror
       - name: Check out the downstream repository
@@ -207,6 +219,15 @@ jobs:
           set -euo pipefail
           base="$(git -C downstream branch --show-current)"
 
+          # A forced run has no fresh publish: use the latest sync commit on main.
+          if [ -z "$NEW" ]; then
+            NEW="$(git -C mirror log -1 --format=%H --grep='^Sync GPUI to Zed')"
+            if [ -z "$NEW" ]; then
+              echo '::error::This mirror has no sync commit to pin yet'
+              exit 1
+            fi
+          fi
+
           # The pin must be a submodule that points at this repository, otherwise
           # moving it to a commit of this mirror would break the downstream checkout.
           entry="$(git -C downstream ls-tree HEAD -- "$PIN_PATH")"
@@ -225,6 +246,7 @@ jobs:
           esac
           if [ "$old" = "$NEW" ]; then
             echo "$PIN_PATH already points at $NEW."
+            echo "$DOWNSTREAM_REPO already pins $NEW (the latest sync); no pull request needed." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -249,11 +271,13 @@ jobs:
 
           title_file="$RUNNER_TEMP/pr-title.txt"
           body_file="$RUNNER_TEMP/pr-body.md"
+          render_args=()
+          if [ "$UNVALIDATED" = 'true' ]; then render_args+=(--unvalidated); fi
           python mirror/scripts/downstream_pr.py \
             --mirror mirror --upstream "$zed" --old "$old" --new "$NEW" \
             --repository "$GITHUB_REPOSITORY" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            --body-out "$body_file" --title-out "$title_file"
+            --body-out "$body_file" --title-out "$title_file" "${render_args[@]}"
           title="$(cat "$title_file")"
 
           # One rolling branch and PR: every sync force-updates it until it is merged.
@@ -275,6 +299,7 @@ jobs:
               --title "$title" --body-file "$body_file")"
           fi
           echo "Pull request: $pr_url"
+          echo "Pull request: $pr_url" >> "$GITHUB_STEP_SUMMARY"
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
 
   notify:

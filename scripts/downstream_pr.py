@@ -98,6 +98,8 @@ def main() -> None:
     parser.add_argument("--new", required=True, help="mirror commit to pin")
     parser.add_argument("--repository", required=True, help="owner/name of this repository")
     parser.add_argument("--run-url", default="")
+    parser.add_argument("--unvalidated", action="store_true",
+                        help="the cross-platform checks were not run for this PR (manual, forced run)")
     parser.add_argument("--body-out", type=Path, required=True)
     parser.add_argument("--title-out", type=Path, required=True)
     args = parser.parse_args()
@@ -169,10 +171,14 @@ def main() -> None:
 
     out += ["", "## How it was checked", ""]
     run = f" ([run]({args.run_url}))" if args.run_url else ""
-    out += [
-        f"- Mirror CI ran `cargo check -p gpui -p gpui_platform` on Linux, Windows and macOS against this commit{run}.",
-        "- Not checked there: this repository's own build and tests with the new pin. The checks on this PR cover that.",
-    ]
+    if args.unvalidated:
+        out.append(
+            "- The mirror's cross-platform checks were **not re-run** for this PR, which was started manually. "
+            f"Check this commit's sync run in the [mirror's Actions]({base}/actions) before merging."
+        )
+    else:
+        out.append(f"- Mirror CI ran `cargo check -p gpui -p gpui_platform` on Linux, Windows and macOS against this commit{run}.")
+    out.append("- Not checked there: this repository's own build and tests with the new pin. The checks on this PR cover that.")
     if old_known and new_channel != old_channel:
         out.append(f"- **The Rust toolchain changed** (`{old_channel or 'unset'}` → `{new_channel or 'unset'}`). Check local setups and CI images.")
 
