@@ -19,6 +19,16 @@ ZED = "https://github.com/zed-industries/zed"
 MAX_BODY = 60_000  # GitHub rejects bodies over 65,536 characters
 MAX_UPSTREAM_COMMITS = 40
 MAX_DEPENDENCY_LINES = 25
+MAX_SYNC_COMMITS = 100
+SYNC_SUBJECT = "Sync GPUI to Zed"
+
+# Files the mirror itself owns. They are not GPUI, so they don't count towards the size of an update.
+MIRROR_DIRS = {".github", "scripts"}
+MIRROR_FILES = {"README.md", ".gitignore", "UPSTREAM", "SELECTED-CRATES", "generated-other-paths.txt"}
+
+
+def is_mirror_file(path: str) -> bool:
+    return path in MIRROR_FILES or path.split("/", 1)[0] in MIRROR_DIRS
 
 
 def is_commit(repo: Path, sha: str) -> bool:
@@ -105,17 +115,34 @@ def main() -> None:
     new_crates = crates(new)
     old_crates = crates(old) if old_known else set()
 
+    # Commits between the two pins. The bot's sync commits hold only the extracted GPUI
+    # files; any other commit is a change to the mirror's own tooling.
+    range_commits: list[tuple[str, str]] = []
+    if old_known:
+        log = git(mirror, "log", "--format=%H%x09%s", f"--max-count={MAX_SYNC_COMMITS}", f"{old}..{new}", check=False)
+        for line in log.splitlines():
+            sha, _, subject = line.partition("\t")
+            range_commits.append((sha, subject))
+    syncs = [(sha, subject) for sha, subject in range_commits if subject.startswith(SYNC_SUBJECT)]
+    tooling_commits = len(range_commits) - len(syncs)
+
     base = f"https://github.com/{repo}"
     zed_link = f"{ZED}/compare/{old_up}...{new_up}" if old_up else f"{ZED}/commit/{new_up}"
     title = f"Bump GPUI mirror to Zed {short(new_up)}"
 
     out: list[str] = ["## What and why", ""]
     if old_known:
+        if len(syncs) == 1:
+            mirror_line = f"- [Mirror commit]({base}/commit/{syncs[0][0]}): the GPUI changes in this update"
+        else:
+            mirror_line = (f"- [Mirror diff]({base}/compare/{old}...{new}): the combined diff of {len(syncs)} syncs, "
+                           "each linked below"
+                           + (", including changes to the mirror's own tooling" if tooling_commits else ""))
         out += [
             f"Moves the GPUI pin from [`{short(old)}`]({base}/commit/{old}) (Zed `{short(old_up)}`) "
             f"to [`{short(new)}`]({base}/commit/{new}) (Zed `{short(new_up)}`).",
             "",
-            f"- [Mirror diff]({base}/compare/{old}...{new}): exactly what changes in this repository",
+            mirror_line,
             f"- [Zed diff]({zed_link}): the same range in upstream, including everything the mirror leaves out",
         ]
     else:
@@ -175,23 +202,24 @@ def main() -> None:
             if len(parts) != 3:
                 continue
             a, d, name = parts
+            if is_mirror_file(name):
+                continue
             a_n, d_n = (int(a) if a.isdigit() else 0), (int(d) if d.isdigit() else 0)
             total_added += a_n
             total_removed += d_n
             files.append((a_n + d_n, a_n, d_n, name))
         files.sort(reverse=True)
-        changes += [f"### Size of the change", "", f"{len(files)} files changed, +{total_added:,} / -{total_removed:,} lines.", ""]
+        changes += [f"### Size of the change", "", f"{len(files)} files changed, +{total_added:,} / -{total_removed:,} lines. Only GPUI's own files are counted, not the mirror's tooling.", ""]
         if files:
             changes += ["Largest files:", ""]
             changes += [f"- `{name}` (+{a_n}/-{d_n})" for _, a_n, d_n, name in files[:10]]
             changes.append("")
 
-        syncs = git(mirror, "log", "--format=%H%x09%s", "--max-count=30", f"{old}..{new}", check=False).splitlines()
         if len(syncs) > 1:
-            changes += [f"### Mirror syncs included ({len(syncs)}{'+' if len(syncs) == 30 else ''})", "",
-                        "Syncs that landed since the current pin; they are bundled into this one PR.", ""]
-            for line in syncs[:10]:
-                sha, _, subject = line.partition("\t")
+            truncated = len(range_commits) == MAX_SYNC_COMMITS
+            changes += [f"### Mirror syncs included ({len(syncs)}{'+' if truncated else ''})", "",
+                        "Syncs that landed since the current pin; they are bundled into this one PR. Each commit holds only the GPUI changes of that sync.", ""]
+            for sha, subject in syncs[:10]:
                 changes.append(f"- [`{short(sha)}`]({base}/commit/{sha}) {code(subject)}")
             if len(syncs) > 10:
                 changes.append(f"- … and {len(syncs) - 10} more")
