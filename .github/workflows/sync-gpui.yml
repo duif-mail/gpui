@@ -2,11 +2,11 @@ name: Auto-sync GPUI from Zed
 
 on:
   schedule:
-    - cron: '17 */6 * * *' # Every 6 hours at :17
+    - cron: '17 */6 * * *'
   workflow_dispatch:
     inputs:
       force_downstream:
-        description: 'When there is nothing new to sync, still open or refresh the downstream pull request from the latest sync commit on main (needs DOWNSTREAM_REPO).'
+        description: 'Reopen or refresh the downstream PR even when there are no new mirror changes.'
         type: boolean
         default: false
 
@@ -36,26 +36,6 @@ jobs:
           fi
       - name: Download upstream Zed temporarily
         run: git clone --depth 1 --filter=blob:none https://github.com/zed-industries/zed.git "$RUNNER_TEMP/zed"
-      - name: Fetch recent upstream history for relevant commit summaries
-        shell: bash
-        run: |
-          if [ ! -s "$RUNNER_TEMP/previous-upstream" ]; then exit 0; fi
-          previous="$(cat "$RUNNER_TEMP/previous-upstream")"
-          if ! [[ "$previous" =~ ^[[:xdigit:]]{40}$ ]]; then
-            echo 'Invalid previous upstream SHA' >&2
-            exit 1
-          fi
-          # Download commit metadata incrementally, without downloading all of
-          # Zed's previous file contents. The mirror extraction uses current HEAD.
-          for n in 1 2 3 4 5; do
-            if git -C "$RUNNER_TEMP/zed" cat-file -e "$previous^{commit}" 2>/dev/null; then
-              break
-            fi
-            git -C "$RUNNER_TEMP/zed" fetch --filter=blob:none --deepen=200 origin HEAD
-          done
-          if ! git -C "$RUNNER_TEMP/zed" cat-file -e "$previous^{commit}" 2>/dev/null; then
-            echo 'Previous SHA outside fetched history; Discord will link full compare.'
-          fi
       - name: Extract GPUI and its in-tree dependency closure
         run: python scripts/extract_gpui.py --upstream "$RUNNER_TEMP/zed" --output .
       - name: Apply optional patches
@@ -66,7 +46,7 @@ jobs:
             git apply --check "$patch"
             git apply "$patch"
           done
-      - name: Compute real mirror diff and changelog
+      - name: Compute mirror diff and changelog
         id: detect
         shell: bash
         run: |
@@ -160,15 +140,8 @@ jobs:
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  # Optional: keep a pull request open in a downstream repository that pins this
-  # mirror as a submodule. Enabled by setting the DOWNSTREAM_REPO repository variable
-  # (owner/name) together with the DOWNSTREAM_TOKEN secret. Optional variables:
-  # DOWNSTREAM_SUBMODULE_PATH (default third_party/gpui) and DOWNSTREAM_BASE_BRANCH
-  # (default: the repository's default branch).
   downstream:
     needs: [prepare, validate, publish]
-    # Normally runs after a validated publish. A manual run with force_downstream also
-    # runs it when there was nothing new to sync, using the latest sync commit on main.
     if: >-
       always() && vars.DOWNSTREAM_REPO != '' && needs.prepare.result == 'success' && (
         (needs.publish.result == 'success' && needs.validate.result == 'success') ||
@@ -219,7 +192,6 @@ jobs:
           set -euo pipefail
           base="$(git -C downstream branch --show-current)"
 
-          # A forced run has no fresh publish: use the latest sync commit on main.
           if [ -z "$NEW" ]; then
             NEW="$(git -C mirror log -1 --format=%H --grep='^Sync GPUI to Zed')"
             if [ -z "$NEW" ]; then
@@ -228,8 +200,6 @@ jobs:
             fi
           fi
 
-          # The pin must be a submodule that points at this repository, otherwise
-          # moving it to a commit of this mirror would break the downstream checkout.
           entry="$(git -C downstream ls-tree HEAD -- "$PIN_PATH")"
           case "$entry" in
             '160000 commit '*) ;;
@@ -250,7 +220,6 @@ jobs:
             exit 0
           fi
 
-          # Partial Zed clone, only to list the upstream commits between both pins.
           new_up="$(git -C mirror show "$NEW:UPSTREAM")"
           old_up=''
           if git -C mirror cat-file -e "$old^{commit}" 2>/dev/null; then
@@ -280,7 +249,6 @@ jobs:
             --body-out "$body_file" --title-out "$title_file" "${render_args[@]}"
           title="$(cat "$title_file")"
 
-          # One rolling branch and PR: every sync force-updates it until it is merged.
           git -C downstream checkout -q -B "$BRANCH"
           git -C downstream update-index --cacheinfo "160000,$NEW,$PIN_PATH"
           git -C downstream \
@@ -317,24 +285,22 @@ jobs:
         with:
           name: gpui-sync-preview
           path: preview
-      - name: Post success or failure to Discord
+      - name: Post Discord notification
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_THREAD_ID: ${{ vars.DISCORD_THREAD_ID }}
+          DISCORD_CREATE_THREAD: ${{ vars.DISCORD_CREATE_THREAD }}
           PUSHED_SHA: ${{ needs.publish.outputs.sha }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
-          VALIDATE_RESULT: ${{ needs.validate.result }}
           DOWNSTREAM_RESULT: ${{ needs.downstream.result }}
           DOWNSTREAM_PR_URL: ${{ needs.downstream.outputs.pr_url }}
         shell: bash
         run: |
-          if [ "$PUBLISH_RESULT" != 'success' ]; then
-            status=failed
-          elif [ "$VALIDATE_RESULT" != 'success' ]; then
-            status=warning
-          else
+          status=failed
+          if [ "$PUBLISH_RESULT" = 'success' ]; then
             status=success
           fi
-          args=(--report preview/report.json --status "$status" --commit "$PUSHED_SHA")
+          args=(--report preview/report.json --patch preview/gpui.patch --status "$status" --commit "$PUSHED_SHA")
           if [ -n "$DOWNSTREAM_PR_URL" ]; then args+=(--pr-url "$DOWNSTREAM_PR_URL"); fi
           if [ "$DOWNSTREAM_RESULT" = 'failure' ]; then args+=(--pr-failed); fi
           python scripts/notify_discord.py "${args[@]}"
