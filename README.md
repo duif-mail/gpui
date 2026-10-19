@@ -64,7 +64,7 @@ A GitHub Actions workflow ([`sync-gpui.yml`](.github/workflows/sync-gpui.yml)) r
 5. **Publish.** The change is committed to `main` as `Sync GPUI to Zed <sha>`.
 6. **Notify.** A summary is posted to a Discord webhook: crates added or removed, diff size, and the upstream commits that touched the mirrored crates. This step requires the `DISCORD_WEBHOOK_URL` Actions secret.
 
-If the platform checks fail, the update is still published, but the notification is flagged as a warning. Check the workflow logs before updating.
+Updates are published only after successful validation on Linux, Windows, and macOS. If validation fails, the mirror remains unchanged until a subsequent sync passes.
 
 A separate workflow, [`validate-gpui.yml`](.github/workflows/validate-gpui.yml), can be run manually to re-run the cross-platform build checks against the current `main`.
 
