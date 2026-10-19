@@ -10,6 +10,7 @@ on:
           - success
           - failure
           - downstream_failure
+          - metadata_only
         default: success
 
 permissions:
@@ -65,6 +66,7 @@ jobs:
               'new_crates': ['gpui_example_new', 'render_utils', 'display_bridge'],
               'removed_crates': ['legacy_window_backend'],
               'largest_files': files[:5],
+              'has_relevant_changes': True,
           }
           (output / 'report.json').write_text(json.dumps(report), encoding='utf-8')
           assert len(patch) > 4096, 'Fake patch must exceed Discord description limit'
@@ -88,13 +90,27 @@ jobs:
             args+=(--pr-url "$EXAMPLE_PR_URL")
           fi
 
+          if [ "$TEST_SCENARIO" = 'metadata_only' ]; then
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report_file = Path('preview/report.json')
+          report = json.loads(report_file.read_text())
+          report.update(has_relevant_changes=False, file_count=0, added=0, removed=0, largest_files=[])
+          report_file.write_text(json.dumps(report))
+          PY
+          fi
+
           python3 scripts/notify_discord.py "${args[@]}" --dry-run > preview/payload.json
           python3 - <<'PY'
           import json
           from pathlib import Path
 
           payload = json.loads(Path('preview/payload.json').read_text())
-          if 'embeds' in payload:
+          if payload.get('skipped'):
+              assert payload['reason'] == 'No relevant GPUI changes'
+              print('Metadata-only notification suppressed')
+          elif 'embeds' in payload:
               assert len(payload['embeds']) == 1
               embed = payload['embeds'][0]
               assert len(embed['description']) <= 4096
