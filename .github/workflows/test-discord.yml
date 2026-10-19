@@ -1,0 +1,65 @@
+name: Test Discord Notification
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Send test embed
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+          if not webhook:
+              raise SystemExit("Missing DISCORD_WEBHOOK_URL secret")
+
+          patch = """diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+          --- a/crates/gpui/src/window.rs
+          +++ b/crates/gpui/src/window.rs
+          @@ -18,3 +18,4 @@
+          -    let scale = 1.0;
+          +    let scale = display_scale();
+          +    let text_scale = user_scale();
+
+          diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+          --- a/crates/gpui/src/platform.rs
+          +++ b/crates/gpui/src/platform.rs
+          @@ -42,2 +42,2 @@
+          -    initialize();
+          +    initialize_platform();
+          """
+
+          payload = {
+              "embeds": [{
+                  "title": "🧪 TEST — GPUI mirror diff",
+                  "url": "https://github.com/duif-mail/gpui/commits/main",
+                  "description": (
+                      "**2 files changed** · +3 / -2 lines\n"
+                      "**Preview only — no changes published**\n"
+                      f"```diff\n{patch}\n```"
+                  ),
+              }],
+              "allowed_mentions": {"parse": []},
+          }
+
+          request = urllib.request.Request(
+              webhook,
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+
+          with urllib.request.urlopen(request, timeout=15) as response:
+              print(f"Discord test sent (HTTP {response.status})")
+          PY
