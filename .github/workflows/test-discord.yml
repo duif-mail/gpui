@@ -2,82 +2,108 @@ name: Test Discord Notification
 
 on:
   workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Choose which notification to preview.'
+        type: choice
+        options:
+          - success
+          - failure
+          - downstream_failure
+        default: success
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-
     steps:
-      - name: Send test embed
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+      - name: Generate an oversized fake GPUI diff
         shell: bash
         run: |
           python3 - <<'PY'
           import json
-          import os
-          import urllib.error
-          import urllib.request
+          import subprocess
+          from pathlib import Path
 
-          webhook = os.environ.get("DISCORD_WEBHOOK_URL")
-          if not webhook:
-              raise SystemExit("Missing DISCORD_WEBHOOK_URL secret")
+          output = Path('preview')
+          output.mkdir(exist_ok=True)
+          current = Path('UPSTREAM').read_text().strip() if Path('UPSTREAM').exists() else ''
+          previous = subprocess.run(
+              ['git', 'show', 'HEAD~8:UPSTREAM'],
+              capture_output=True, text=True, check=False,
+          ).stdout.strip()
 
-          patch = """diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-          --- a/crates/gpui/src/window.rs
-          +++ b/crates/gpui/src/window.rs
-          @@ -18,3 +18,4 @@
-          -    let scale = 1.0;
-          +    let scale = display_scale();
-          +    let text_scale = user_scale();
-
-          diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-          --- a/crates/gpui/src/platform.rs
-          +++ b/crates/gpui/src/platform.rs
-          @@ -42,2 +42,2 @@
-          -    initialize();
-          +    initialize_platform();
-          """
-
-          payload = {
-              "embeds": [
-                  {
-                      "title": "TEST — GPUI mirror diff",
-                      "url": "https://github.com/duif-mail/gpui/commits/main",
-                      "color": 0x5865F2,
-                      "description": (
-                          "**2 files changed** · +3 / -2 lines\n"
-                          "**Preview only — no changes published**\n\n"
-                          f"```diff\n{patch}\n```"
-                      ),
-                  }
-              ],
-              "allowed_mentions": {"parse": []},
+          files = []
+          chunks = []
+          for index in range(100):
+              name = f'crates/gpui/src/synthetic_{index:03d}.rs'
+              files.append({'path': name, 'added': 30, 'removed': 10})
+              chunks.append(
+                  f'diff --git a/{name} b/{name}\n'
+                  f'--- a/{name}\n'
+                  f'+++ b/{name}\n'
+                  '@@ -10,2 +10,3 @@\n'
+              )
+              for line in range(30):
+                  chunks.append(f'-    let old_{line} = render_before({index}, {line});\n')
+                  chunks.append(f'+    let new_{line} = render_after({index}, {line});\n')
+          patch = ''.join(chunks)
+          (output / 'gpui.patch').write_text(patch, encoding='utf-8')
+          report = {
+              'previous': previous,
+              'current': current,
+              'crate_count': 85,
+              'file_count': 100,
+              'added': 3000,
+              'removed': 1000,
+              'new_crates': ['gpui_example_new', 'render_utils', 'display_bridge'],
+              'removed_crates': ['legacy_window_backend'],
+              'largest_files': files[:5],
           }
-
-          request = urllib.request.Request(
-              webhook,
-              data=json.dumps(payload).encode("utf-8"),
-              headers={
-                  "Content-Type": "application/json",
-                  "User-Agent": "DiscordBot (https://github.com/duif-mail/gpui, 1.0)",
-              },
-              method="POST",
-          )
-
-          try:
-              with urllib.request.urlopen(request, timeout=15) as response:
-                  print(f"Discord test sent (HTTP {response.status})")
-          except urllib.error.HTTPError as error:
-              body = error.read(500).decode("utf-8", errors="replace")
-              body = body.replace(webhook, "[REDACTED]")
-              print(f"Discord rejected request: HTTP {error.code}")
-              print(f"Response: {body}")
-              raise SystemExit(1)
-          except urllib.error.URLError as error:
-              print(f"Connection failed: {error.reason}")
-              raise SystemExit(1)
+          (output / 'report.json').write_text(json.dumps(report), encoding='utf-8')
+          assert len(patch) > 4096, 'Fake patch must exceed Discord description limit'
+          print(f'Generated fake patch: {len(patch):,} characters (Discord description max: 4,096)')
           PY
+      - name: Validate truncation and send real Discord embed
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_THREAD_ID: ${{ vars.DISCORD_THREAD_ID }}
+          DISCORD_CREATE_THREAD: ${{ vars.DISCORD_CREATE_THREAD }}
+          TEST_SCENARIO: ${{ inputs.scenario }}
+          EXAMPLE_PR_URL: ${{ vars.DISCORD_TEST_PR_URL || 'https://github.com/duif-mail/duif/pull/28' }}
+        shell: bash
+        run: |
+          status=success
+          if [ "$TEST_SCENARIO" = 'failure' ]; then status=failed; fi
+          args=(--report preview/report.json --patch preview/gpui.patch --status "$status" --commit "$GITHUB_SHA" --test)
+          if [ "$TEST_SCENARIO" = 'downstream_failure' ]; then
+            args+=(--pr-failed)
+          else
+            args+=(--pr-url "$EXAMPLE_PR_URL")
+          fi
+
+          python3 scripts/notify_discord.py "${args[@]}" --dry-run > preview/payload.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path('preview/payload.json').read_text())
+          if 'embeds' in payload:
+              assert len(payload['embeds']) == 1
+              embed = payload['embeds'][0]
+              assert len(embed['description']) <= 4096
+              assert 'preview truncated' in embed['description']
+              assert any(field['name'] == 'Links' for field in embed['fields'])
+              print(f"Payload validated: {len(embed['description'])} description characters, "
+                    f"{len(embed['fields'])} fields, 1 embed, truncation visible")
+          else:
+              assert 'sync failed' in payload['content']
+              print('Failure notification validated (no embed)')
+          PY
+          python3 scripts/notify_discord.py "${args[@]}"
