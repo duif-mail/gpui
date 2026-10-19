@@ -136,7 +136,7 @@ jobs:
         run: cargo check -p gpui -p gpui_platform
 
   publish:
-    needs: prepare
+    needs: [prepare, validate]
     if: needs.prepare.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     permissions:
