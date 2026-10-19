@@ -212,6 +212,11 @@ def main() -> None:
         raise SystemExit("Set the DISCORD_WEBHOOK_URL Actions secret")
 
     report = json.loads(args.report.read_text(encoding="utf-8")) if args.report.is_file() else {}
+    if args.status == "success" and report.get("has_relevant_changes") is False:
+        print("No GPUI code diff; skipping Discord notification.", file=sys.stderr)
+        if args.dry_run:
+            print(json.dumps({"skipped": True, "reason": "No relevant GPUI changes"}))
+        return
     run_url = (
         f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/"
         f"{repository}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}"

@@ -22,6 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       changed: ${{ steps.detect.outputs.changed }}
+      relevant: ${{ steps.detect.outputs.relevant }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -62,7 +63,10 @@ jobs:
             --mirror . \
             --upstream "$RUNNER_TEMP/zed" \
             --previous "$RUNNER_TEMP/previous-upstream" \
-            --output .sync-artifacts/report.json
+            --output .sync-artifacts/report.json \
+            --preview-patch .sync-artifacts/mirror-preview.patch
+          relevant="$(python3 -c 'import json; print(str(json.load(open(".sync-artifacts/report.json"))["has_relevant_changes"]).lower())')"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
           git diff --cached --binary > .sync-artifacts/gpui.patch
           tar -czf .sync-artifacts/mirror.tar.gz --exclude=.git --exclude=.sync-artifacts --exclude=target -C "$GITHUB_WORKSPACE" .
           git diff --cached --stat | tail -30
@@ -272,7 +276,14 @@ jobs:
 
   notify:
     needs: [prepare, validate, publish, downstream]
-    if: always() && (needs.prepare.outputs.changed == 'true' || needs.prepare.result == 'failure')
+    if: >-
+      always() && (
+        needs.prepare.outputs.relevant == 'true' ||
+        needs.prepare.result == 'failure' ||
+        needs.validate.result == 'failure' ||
+        needs.publish.result == 'failure' ||
+        needs.downstream.result == 'failure'
+      )
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -300,7 +311,7 @@ jobs:
           if [ "$PUBLISH_RESULT" = 'success' ]; then
             status=success
           fi
-          args=(--report preview/report.json --patch preview/gpui.patch --status "$status" --commit "$PUSHED_SHA")
+          args=(--report preview/report.json --patch preview/mirror-preview.patch --status "$status" --commit "$PUSHED_SHA")
           if [ -n "$DOWNSTREAM_PR_URL" ]; then args+=(--pr-url "$DOWNSTREAM_PR_URL"); fi
           if [ "$DOWNSTREAM_RESULT" = 'failure' ]; then args+=(--pr-failed); fi
           python scripts/notify_discord.py "${args[@]}"
