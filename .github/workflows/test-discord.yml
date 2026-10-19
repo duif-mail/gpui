@@ -56,7 +56,10 @@ jobs:
           request = urllib.request.Request(
               webhook,
               data=json.dumps(payload).encode("utf-8"),
-              headers={"Content-Type": "application/json"},
+              headers={
+    "Content-Type": "application/json",
+    "User-Agent": "DiscordBot (https://github.com/duif-mail/gpui, 1.0)",
+},
               method="POST",
           )
 
