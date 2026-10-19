@@ -217,7 +217,7 @@ pollster = "0.4.0"
 postage = { version = "0.5", default-features = false }
 proc-macro2 = "1.0.93"
 profiling = "1"
-proptest = { git = "https://github.com/proptest-rs/proptest", rev = "3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b", features = ["attr-macro"] }
+proptest = { version = "1.12.0", features = ["attr-macro"] }
 quote = "1.0.9"
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "os_rng"] }
 raw-window-handle = "0.6"
