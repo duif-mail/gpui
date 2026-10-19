@@ -14,10 +14,12 @@ jobs:
       - name: Send test embed
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        shell: bash
         run: |
           python3 - <<'PY'
           import json
           import os
+          import urllib.error
           import urllib.request
 
           webhook = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -41,15 +43,18 @@ jobs:
           """
 
           payload = {
-              "embeds": [{
-                  "title": "🧪 TEST — GPUI mirror diff",
-                  "url": "https://github.com/duif-mail/gpui/commits/main",
-                  "description": (
-                      "**2 files changed** · +3 / -2 lines\n"
-                      "**Preview only — no changes published**\n"
-                      f"```diff\n{patch}\n```"
-                  ),
-              }],
+              "embeds": [
+                  {
+                      "title": "TEST — GPUI mirror diff",
+                      "url": "https://github.com/duif-mail/gpui/commits/main",
+                      "color": 0x5865F2,
+                      "description": (
+                          "**2 files changed** · +3 / -2 lines\n"
+                          "**Preview only — no changes published**\n\n"
+                          f"```diff\n{patch}\n```"
+                      ),
+                  }
+              ],
               "allowed_mentions": {"parse": []},
           }
 
@@ -57,12 +62,22 @@ jobs:
               webhook,
               data=json.dumps(payload).encode("utf-8"),
               headers={
-    "Content-Type": "application/json",
-    "User-Agent": "DiscordBot (https://github.com/duif-mail/gpui, 1.0)",
-},
+                  "Content-Type": "application/json",
+                  "User-Agent": "DiscordBot (https://github.com/duif-mail/gpui, 1.0)",
+              },
               method="POST",
           )
 
-          with urllib.request.urlopen(request, timeout=15) as response:
-              print(f"Discord test sent (HTTP {response.status})")
+          try:
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  print(f"Discord test sent (HTTP {response.status})")
+          except urllib.error.HTTPError as error:
+              body = error.read(500).decode("utf-8", errors="replace")
+              body = body.replace(webhook, "[REDACTED]")
+              print(f"Discord rejected request: HTTP {error.code}")
+              print(f"Response: {body}")
+              raise SystemExit(1)
+          except urllib.error.URLError as error:
+              print(f"Connection failed: {error.reason}")
+              raise SystemExit(1)
           PY
