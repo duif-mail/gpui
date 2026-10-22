@@ -35,7 +35,6 @@ bytemuck = "1"
 bytes = "1.0"
 cbindgen = { version = "0.28.0", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
-cocoa = "=0.26.0"
 collections = { path = "crates/collections", version = "0.1.0" }
 console_error_panic_hook = "0.1.7"
 core-foundation = "0.10"
@@ -104,25 +103,35 @@ mach2 = "0.6"
 metal = "0.33"
 nix = "0.30"
 notify-rust = "4"
-objc = "0.2"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSAlert",
+    "NSAppearance",
     "NSApplication",
     "NSButton",
+    "NSCell",
+    "NSColor",
     "NSControl",
+    "NSCursor",
+    "NSDocumentController",
+    "NSDragging",
     "NSDraggingItem",
     "NSEvent",
     "NSGraphics",
     "NSImage",
+    "NSMenu",
+    "NSMenuItem",
     "NSOpenPanel",
     "NSPanel",
     "NSPasteboard",
     "NSResponder",
+    "NSRunningApplication",
     "NSSavePanel",
     "NSScreen",
+    "NSScroller",
     "NSTrackingArea",
     "NSView",
+    "NSVisualEffectView",
     "NSWindow",
     "NSWorkspace",
     "block2",
@@ -136,6 +145,7 @@ objc2-core-video = { version = "=0.3.2", default-features = false, features = ["
 objc2-foundation = { version = "=0.3.2", default-features = false, features = [
     "NSArray",
     "NSAttributedString",
+    "NSBundle",
     "NSCoder",
     "NSData",
     "NSDate",
