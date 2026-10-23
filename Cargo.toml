@@ -223,7 +223,7 @@ objc2-user-notifications = { version = "0.3", default-features = false, features
     "UNNotificationTrigger",
     "UNUserNotificationCenter",
 ] }
-oo7 = { version = "0.6", default-features = false }
+oo7 = { git = "https://github.com/zed-industries/oo7", rev = "731c1215edb6905876c6137ab300428c7b8d7c13", version = "0.6", default-features = false }
 parking_lot = "0.12.1"
 path = { path = "crates/path" }
 pathfinder_geometry = "0.5"
