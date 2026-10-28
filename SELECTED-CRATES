@@ -14,13 +14,11 @@ crates/gpui_wgpu
 crates/gpui_windows
 crates/http_client
 crates/http_client_tls
-crates/path
 crates/refineable
 crates/refineable/derive_refineable
 crates/reqwest_client
 crates/scheduler
 crates/sum_tree
-crates/util
 crates/util_macros
 crates/zlog
 crates/ztracing

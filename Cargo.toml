@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/bench_metrics", "crates/collections", "crates/gpui", "crates/gpui_apple", "crates/gpui_ios", "crates/gpui_linux", "crates/gpui_macos", "crates/gpui_macros", "crates/gpui_platform", "crates/gpui_shared_string", "crates/gpui_util", "crates/gpui_web", "crates/gpui_wgpu", "crates/gpui_windows", "crates/http_client", "crates/http_client_tls", "crates/path", "crates/refineable", "crates/refineable/derive_refineable", "crates/reqwest_client", "crates/scheduler", "crates/sum_tree", "crates/util", "crates/util_macros", "crates/zlog", "crates/ztracing", "crates/ztracing_macro", "tooling/perf"]
+members = ["crates/bench_metrics", "crates/collections", "crates/gpui", "crates/gpui_apple", "crates/gpui_ios", "crates/gpui_linux", "crates/gpui_macos", "crates/gpui_macros", "crates/gpui_platform", "crates/gpui_shared_string", "crates/gpui_util", "crates/gpui_web", "crates/gpui_wgpu", "crates/gpui_windows", "crates/http_client", "crates/http_client_tls", "crates/refineable", "crates/refineable/derive_refineable", "crates/reqwest_client", "crates/scheduler", "crates/sum_tree", "crates/util_macros", "crates/zlog", "crates/ztracing", "crates/ztracing_macro", "tooling/perf"]
 default-members = ["crates/gpui", "crates/gpui_platform"]
 
 [workspace.package]
@@ -21,12 +21,8 @@ ashpd = { version = "0.13", default-features = false, features = [
     "settings"
 ] }
 async-channel = { version = "2.5", default-features = false }
-async-compression = { version = "0.4", features = ["bzip2", "gzip", "futures-io"] }
-async-fs = "2.1"
-async-tar = { git = "https://github.com/zed-industries/async-tar", rev = "bd3ad6f89df9a9da7a8535958756d6bf465936a0" }
 async-task = "4.7"
 async-tungstenite = "0.33"
-async_zip = { version = "0.0.18", features = ["deflate", "deflate64"] }
 backtrace = "0.3"
 bench_metrics = { path = "crates/bench_metrics" }
 bitflags = "2.6.0"
@@ -45,7 +41,6 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 ctor = "1.0.12"
 derive_more = { version = "2.1", features = ["deref", "deref_mut", "from_str"] }
 derive_refineable = { path = "crates/refineable/derive_refineable" }
-dirs = "6.0"
 dispatch2 = { version = "0.3", default-features = false, features = ["std"] }
 dunce = "1.0"
 env_logger = "0.11"
@@ -55,8 +50,6 @@ font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "94b0f281
 foreign-types = "0.5"
 futures = "0.3.34"
 futures-concurrency = "7.7.1"
-futures-lite = "2"
-globset = "0.4"
 gpui = { path = "crates/gpui", default-features = false }
 gpui_apple = { path = "crates/gpui_apple" }
 gpui_ios = { path = "crates/gpui_ios" }
@@ -100,7 +93,6 @@ js-sys = "0.3"
 libc = "0.2"
 log = { version = "0.4", default-features = false, features = ["std"] }
 mach2 = "0.6"
-nix = "0.30"
 notify-rust = "4"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
@@ -225,9 +217,7 @@ objc2-user-notifications = { version = "0.3", default-features = false, features
 ] }
 oo7 = { git = "https://github.com/zed-industries/oo7", rev = "731c1215edb6905876c6137ab300428c7b8d7c13", version = "0.6", default-features = false }
 parking_lot = "0.12.1"
-path = { path = "crates/path" }
 pathfinder_geometry = "0.5"
-percent-encoding = "2.3.2"
 perf = { path = "tooling/perf", default-features = false }
 perf-event = { package = "perf-event2", version = "0.7.4" }
 pollster = "0.4.0"
@@ -255,7 +245,6 @@ resvg = { version = "0.46.0", default-features = false, features = [
     "memmap-fonts",
     "raster-images",
 ] }
-rust-embed = { version = "8.11", features = ["include-exclude", "compression"] }
 rustc-hash = "2.1.0"
 rustls = "0.23.26"
 rustls-platform-verifier = "0.7"
@@ -265,13 +254,7 @@ schemars = { version = "1.0", default-features = false, features = ["std", "inde
 semver = { version = "1.0", features = ["serde"] }
 serde = { version = "1.0", features = ["rc"] }
 serde_json = { version = "1.0.144", features = ["preserve_order", "raw_value"] }
-serde_json_lenient = { version = "0.2", features = [
-    "preserve_order",
-    "raw_value",
-] }
 serde_urlencoded = "0.7"
-sha2 = "0.10"
-shlex = "2.0"
 slotmap = "1.0.6"
 smallvec = { version = "1.6", features = ["union", "const_new"] }
 smol = "2.0"
@@ -283,12 +266,10 @@ swash = "0.2.6"
 syn = { version = "2.0", default-features = false, features = ["proc-macro"] }
 taffy = { version = "=0.15.0", default-features = false }
 tempfile = "3.20.0"
-tendril = "0.5"
 thiserror = "2.0.12"
 tokio = "1"
 tracing = "0.1.40"
 tracing-subscriber = "0.3"
-unicase = "2.6"
 unicode-bidi = { version = "0.3.18", default-features = false, features = [
     "hardcoded-data",
 ] }
@@ -296,10 +277,8 @@ unicode-script = "0.5.7"
 unicode-segmentation = "1.10"
 url = "2.2"
 usvg = { version = "0.46.0", default-features = false }
-util = { path = "crates/util" }
 util_macros = { path = "crates/util_macros" }
 uuid = { version = "1.1", features = ["serde"] }
-walkdir = "2.5"
 wasm-bindgen = "0.2.120"
 wasm-bindgen-futures = "0.4"
 wasm_thread = { git = "https://github.com/zed-industries/wasm_thread", rev = "0cf96c7708dfb97ccf3da50347e25edcf75d6937", version = "0.3", features = ["es_modules"] }
