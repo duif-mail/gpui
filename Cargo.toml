@@ -69,6 +69,7 @@ http = "1.1"
 http-body = "1.0"
 http_client = { path = "crates/http_client" }
 http_client_tls = { path = "crates/http_client_tls" }
+icu_segmenter = { version = "2.3.0", default-features = false, features = ["compiled_data"] }
 image = { version = "0.25.1", default-features = false, features = [
     "bmp",
     "dds",
