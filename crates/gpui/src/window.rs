@@ -633,6 +633,15 @@ impl FocusHandle {
         self.id.contains(other.id, window)
     }
 
+    /// Obtains whether the element associated with this handle is part of the most recently rendered frame.
+    pub fn is_rendered(&self, window: &Window) -> bool {
+        window
+            .rendered_frame
+            .dispatch_tree
+            .focusable_node_id(self.id)
+            .is_some()
+    }
+
     /// Dispatch an action on the element that rendered this focus handle
     pub fn dispatch_action(&self, action: &dyn Action, window: &mut Window, cx: &mut App) {
         if let Some(node_id) = window
@@ -2515,6 +2524,65 @@ impl Window {
         }
     }
 
+    /// This window's part of [`App::debug_state`].
+    ///
+    /// Values GPUI caches are reported next to what the platform reports now,
+    /// so a stale cache shows up as a mismatch.
+    pub(crate) fn debug_state(&self) -> serde_json::Value {
+        let platform_window = &self.platform_window;
+        serde_json::json!({
+            "id": self.handle.window_id().as_u64(),
+            "title": platform_window.get_title(),
+            "bounds": platform_window.bounds(),
+            "window_bounds": format!("{:?}", platform_window.window_bounds()),
+            "content_size": platform_window.content_size(),
+            "viewport_size": self.viewport_size,
+            "scale_factor": {
+                "cached": self.scale_factor,
+                "platform": platform_window.scale_factor(),
+            },
+            "display_id": {
+                "cached": self.display_id.map(u64::from),
+                "platform": platform_window.display().map(|display| u64::from(display.id())),
+            },
+            "active": {
+                "cached": self.active.get(),
+                "platform": platform_window.is_active(),
+            },
+            "hovered": {
+                "cached": self.hovered.get(),
+                "platform": platform_window.is_hovered(),
+            },
+            "visibility": {
+                "cached": format!("{:?}", self.visibility),
+                "platform": format!("{:?}", platform_window.visibility()),
+            },
+            "appearance": {
+                "cached": format!("{:?}", self.appearance),
+                "platform": format!("{:?}", platform_window.appearance()),
+            },
+            "is_fullscreen": platform_window.is_fullscreen(),
+            "is_maximized": platform_window.is_maximized(),
+            "mouse_position": {
+                "cached": self.mouse_position,
+                "platform": platform_window.mouse_position(),
+            },
+            "modifiers": {
+                "cached": self.modifiers,
+                "platform": platform_window.modifiers(),
+            },
+            "cursor_style": self.rendered_frame.cursor_style(self),
+            "frame": {
+                "dirty": self.invalidator.is_dirty(),
+                "needs_present": self.needs_present.get(),
+                "refreshing": self.refreshing,
+                "next_frame_callbacks": self.next_frame_callbacks.borrow().len(),
+            },
+            "gpu": platform_window.gpu_specs(),
+            "platform": platform_window.debug_state(),
+        })
+    }
+
     /// Whether the platform is presenting this window's frames (see
     /// [`WindowVisibility`]).
     pub fn visibility(&self) -> WindowVisibility {
@@ -3303,6 +3371,12 @@ impl Window {
     #[cfg(target_os = "macos")]
     pub fn set_traffic_light_position(&self, position: Point<Pixels>) {
         self.platform_window.set_traffic_light_position(position);
+    }
+
+    /// Shows or hides the native macOS titlebar, including the traffic light buttons.
+    #[cfg(target_os = "macos")]
+    pub fn set_native_titlebar_visibility(&self, visible: bool) {
+        self.platform_window.set_native_titlebar_visibility(visible);
     }
 
     /// Sets the application identifier.
@@ -8469,6 +8543,34 @@ mod tests {
         }
     }
 
+    /// A stale cache is only visible if the snapshot reports GPUI's cached
+    /// value separately from what the platform reports now.
+    #[gpui::test]
+    fn test_debug_state_reports_cached_and_platform_values(cx: &mut TestAppContext) {
+        use crate::WindowVisibility;
+
+        let window = cx.add_window(|_, _| EmptyView);
+        let window_id = window.window_id().as_u64();
+        let window_state = |cx: &mut TestAppContext| {
+            let state = cx.update(|cx| cx.debug_state());
+            state["windows"]
+                .as_array()
+                .and_then(|windows| windows.iter().find(|window| window["id"] == window_id))
+                .cloned()
+                .expect("the open window is listed")
+        };
+
+        let state = window_state(cx);
+        assert_eq!(state["visibility"]["cached"], "Visible");
+        assert_eq!(state["visibility"]["platform"], "Visible");
+
+        cx.test_window(window.into())
+            .simulate_visibility_change(WindowVisibility::Hidden);
+        let state = window_state(cx);
+        assert_eq!(state["visibility"]["cached"], "Hidden");
+        assert_eq!(state["visibility"]["platform"], "Hidden");
+    }
+
     /// Visibility transitions reach observers exactly once each, with the new
     /// state already stored on the window, and never wake the platform for a
     /// frame: the platform requests one itself when it resumes presenting.
@@ -8980,6 +9082,50 @@ mod tests {
                 (scale_factor, expected_bounds, resized_size)
             );
         }
+    }
+
+    #[gpui::test]
+    fn test_fullscreen_toggle_reports_current_bounds(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| EmptyView);
+        let handle = AnyWindowHandle::from(window);
+        let notifications = Rc::new(Cell::new(0));
+        window
+            .update(cx, {
+                let notifications = notifications.clone();
+                |_, window, cx| {
+                    cx.observe_window_bounds(window, move |_, _, _| {
+                        notifications.set(notifications.get() + 1)
+                    })
+                    .detach();
+                }
+            })
+            .unwrap();
+        let window_state = |cx: &mut TestAppContext| {
+            cx.update_window(handle, |_, window, _| {
+                (
+                    window.is_fullscreen(),
+                    window.bounds().size,
+                    window.viewport_size(),
+                )
+            })
+            .unwrap()
+        };
+        let initial_size = window_state(cx).1;
+
+        window
+            .update(cx, |_, window, _| window.toggle_fullscreen())
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(window_state(cx), (true, initial_size, initial_size));
+        assert_eq!(notifications.get(), 1);
+
+        let resized_size = size(px(800.), px(600.));
+        window
+            .update(cx, |_, window, _| window.toggle_fullscreen())
+            .unwrap();
+        cx.simulate_window_resize(handle, resized_size);
+        cx.run_until_parked();
+        assert_eq!(window_state(cx), (false, resized_size, resized_size));
     }
 
     /// Platforms that stop requesting frames for idle windows (currently web)

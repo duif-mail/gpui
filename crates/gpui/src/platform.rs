@@ -538,6 +538,11 @@ pub trait Platform: 'static {
     fn on_will_open_app_menu(&self, callback: Box<dyn FnMut()>);
     fn on_validate_app_menu_command(&self, callback: Box<dyn FnMut(&dyn Action) -> bool>);
 
+    /// Platform-specific diagnostic state, for [`App::debug_state`].
+    fn debug_state(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+
     fn thermal_state(&self) -> ThermalState;
     fn on_thermal_state_change(&self, callback: Box<dyn FnMut()>);
     fn prevent_idle_sleep(&self, reason: &str) -> Task<Result<ActivityGuard>>;
@@ -1332,6 +1337,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn zoom(&self);
     fn toggle_fullscreen(&self);
     fn is_fullscreen(&self) -> bool;
+    /// Platform-specific diagnostic state, for [`App::debug_state`].
+    fn debug_state(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
     fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
         None
     }
@@ -1377,6 +1386,8 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     #[cfg(target_os = "macos")]
     fn set_traffic_light_position(&self, _position: Point<Pixels>) {}
+    #[cfg(target_os = "macos")]
+    fn set_native_titlebar_visibility(&self, _visible: bool) {}
     fn show_character_palette(&self) {}
     fn titlebar_double_click(&self, _is_resizable: bool, _is_minimizable: bool) {}
     fn on_move_tab_to_new_window(&self, _callback: Box<dyn FnMut()>) {}
@@ -3039,7 +3050,9 @@ impl From<&str> for PromptButton {
 }
 
 /// The style of the cursor (pointer)
-#[derive(Copy, Clone, Default, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Copy, Clone, Default, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, EnumIter,
+)]
 pub enum CursorStyle {
     /// The default cursor
     #[default]
